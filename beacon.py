@@ -375,7 +375,8 @@ class BeaconProbe:
     # Internal
 
     def _update_thresholds(self, moving_up=False):
-        self.trigger_freq = self.dist_to_freq(self.trigger_distance, self.last_temp)
+        self.trigger_freq = self.dist_to_freq(self.trigger_distance,
+            self.last_temp)
         self.untrigger_freq = self.trigger_freq * (1-self.trigger_hysteresis)
 
     def _apply_threshold(self, moving_up=False):
@@ -448,7 +449,8 @@ class BeaconProbe:
             new_limit = 1
         self._stream_buffer_limit_new = new_limit
 
-    def streaming_session(self, callback, completion_callback=None, latency=None):
+    def streaming_session(self, callback, completion_callback=None,
+        latency=None):
         return StreamingHelper(self, callback, completion_callback, latency)
 
     def _stream_flush(self):
@@ -476,7 +478,7 @@ class BeaconProbe:
                 return
 
     def _stream_flush_schedule(self):
-        force = self._stream_en == 0 # When streaming is disabled, let all through
+        force = self._stream_en == 0 # When streaming is disabled, pass all
         if self._stream_buffer_limit_new != self._stream_buffer_limit:
             force = True
             self._stream_buffer_limit = self._stream_buffer_limit_new
@@ -671,7 +673,8 @@ class BeaconProbe:
             def close_file():
                 f.close()
             completion_cb = close_file
-            f.write("time,data,data_smooth,freq,dist,temp,pos_x,pos_y,pos_z,vel\n")
+            f.write("time,data,data_smooth,freq,dist,temp,"
+                    "pos_x,pos_y,pos_z,vel\n")
 
             def cb(sample):
                 pos = sample.get('pos', None)
@@ -773,9 +776,11 @@ class BeaconModel:
         poly = Polynomial(coef, domain)
         features = config.getlist('model_features', ())
         oven_calibration = 'oven_calibration' in features
-        return BeaconModel(name, beacon, poly, temp, min_z, max_z, offset, oven_calibration)
+        return BeaconModel(name, beacon, poly, temp, min_z, max_z, offset,
+            oven_calibration)
 
-    def __init__(self, name, beacon, poly, temp, min_z, max_z, offset=0, oven_calibration=False):
+    def __init__(self, name, beacon, poly, temp, min_z, max_z, offset=0,
+            oven_calibration=False):
         self.name = name
         self.beacon = beacon
         self.poly = poly
@@ -1325,11 +1330,12 @@ class BeaconMeshHelper:
 
         self.faulty_regions = []
         for i in list(range(1, 100, 1)):
-            start = mesh_config.getfloatlist("faulty_region_%d_min" % (i,), None,
-                                        count=2)
+            start = mesh_config.getfloatlist("faulty_region_%d_min" % (i,),
+                                        None, count=2)
             if start is None:
                 break
-            end = mesh_config.getfloatlist("faulty_region_%d_max" % (i,), count=2)
+            end = mesh_config.getfloatlist("faulty_region_%d_max" % (i,),
+                                        count=2)
             x_min = min(start[0], end[0])
             x_max = max(start[0], end[0])
             y_min = min(start[1], end[1])
@@ -1582,7 +1588,8 @@ class BeaconMeshHelper:
             while (x >= 0 and x <= xi_max and
                    y >= 0 and y <= yi_max):
                 if clusters[(x, y)] is not None:
-                    return (abs(x-start[0])+abs(y-start[0]), median(clusters[(x,y)]))
+                    return (abs(x-start[0])+abs(y-start[0]),
+                            median(clusters[(x,y)]))
                 x += dx
                 y += dy
             return None
