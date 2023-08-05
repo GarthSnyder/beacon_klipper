@@ -130,9 +130,11 @@ class BeaconProbe:
         # Ensure streaming mode is stopped
         self.beacon_stream_cmd.send([0])
 
-        self.model_temp = self.model_temp_builder.build_with_nvm(self)
+        self.model_temp_builder.load_nvm(self)
         self.model = self.models.get(self.default_model_name, None)
         if self.model:
+            self.model_temp = self.model_temp_builder.build(
+                self.model.oven_calibration)
             self._apply_threshold()
 
     def _handle_mcu_identify(self):
@@ -344,9 +346,12 @@ class BeaconProbe:
         temp_median = median(temp)
         self.model = BeaconModel("default",
                                  self, poly, temp_median,
-                                 min(z_offset), max(z_offset))
+                                 min(z_offset), max(z_offset),
+                                 oven_calibration = True)
         self.models[self.model.name] = self.model
         self.model.save(self)
+        self.model_temp = self.model_temp_builder.build(
+            self.model.oven_calibration)
         self._apply_threshold()
 
         self.toolhead.get_last_move_time()
@@ -766,9 +771,11 @@ class BeaconModel:
         [min_z, max_z] = config.getfloatlist('model_range', count=2)
         offset = config.getfloat('model_offset', 0.)
         poly = Polynomial(coef, domain)
-        return BeaconModel(name, beacon, poly, temp, min_z, max_z, offset)
+        features = config.getlist('model_features', ())
+        oven_calibration = 'oven_calibration' in features
+        return BeaconModel(name, beacon, poly, temp, min_z, max_z, offset, oven_calibration)
 
-    def __init__(self, name, beacon, poly, temp, min_z, max_z, offset=0):
+    def __init__(self, name, beacon, poly, temp, min_z, max_z, offset=0, oven_calibration=False):
         self.name = name
         self.beacon = beacon
         self.poly = poly
@@ -776,6 +783,7 @@ class BeaconModel:
         self.max_z = max_z
         self.temp = temp
         self.offset = offset
+        self.oven_calibration = oven_calibration
 
     def save(self, beacon, show_message=True):
         configfile = beacon.printer.lookup_object('configfile')
@@ -789,6 +797,8 @@ class BeaconModel:
         configfile.set(section, 'model_temp',
                        "%f" % (self.temp))
         configfile.set(section, 'model_offset', "%.5f" % (self.offset,))
+        if self.oven_calibration:
+            configfile.set(section, 'model_features', ('oven_calibration'))
         if show_message:
             beacon.gcode.respond_info("Beacon calibration for model '%s' has "
                     "been updated\nfor the current session. The SAVE_CONFIG "
@@ -836,42 +846,75 @@ class BeaconTempModelBuilder:
                 'fmin' : None,
                 'fmin_temp' : None}
 
+    _NVM = {    'fmin' : None,
+                'fmin_temp' : None,
+                'fmin_hot' : None,
+                'fmin_hot_temp' : None,
+                'amfg': None}
+
     @classmethod
     def load(cls, config):
         return BeaconTempModelBuilder(config)
 
     def __init__(self, config):
         self.parameters = BeaconTempModelBuilder._DEFAULTS.copy()
+        self.nvm = BeaconTempModelBuilder._NVM.copy()
         for key in self.parameters.keys():
             param = config.getfloat('tc_' + key, None)
             if param is not None:
                 self.parameters[key] = param
 
-    def build(self):
-        if self.parameters['fmin'] is None or \
-            self.parameters['fmin_temp'] is None:
+    def build(self, oven_calibration=False):
+        if (self.parameters['fmin'] is None \
+            and self.nvm['fmin'] is None) \
+            or (self.parameters['fmin_temp'] is None \
+            and self.nvm['fmin_temp'] is None):
             return None
-        logging.info('beacon: built tempco model %s', self.parameters)
-        return BeaconTempModel(**self.parameters)
+        params = self.parameters.copy()
+        if oven_calibration and self.nvm['amfg'] is not None \
+            and params['amfg'] == self._DEFAULTS['amfg'] \
+            and (params['fmin'] is None or params['fmin_temp'] is None):
+            params['amfg'] = self.nvm['amfg']
+        if params['fmin'] is None or params['fmin_temp'] is None:
+            params['fmin'] = self.nvm['fmin']
+            params['fmin_temp'] = self.nvm['fmin_temp']
+        logging.info('beacon: built tempco model %s', params)
+        return BeaconTempModel(**params)
 
-    def build_with_nvm(self, beacon):
-        nvm_data = beacon.beacon_nvm_read_cmd.send([6, 0])
-        (f_count, adc_count) = struct.unpack("<IH", nvm_data['bytes'])
+    def load_nvm(self, beacon):
+        nvm_data = beacon.beacon_nvm_read_cmd.send([12, 0])
+        (f_count, adc_count, f_hot_count, adc_hot_count) = \
+                struct.unpack("<IHIH", nvm_data['bytes'])
+        if f_hot_count < 0xFFFFFFFF and adc_hot_count < 0xFFFF:
+            self.nvm['fmin_hot'] = beacon.count_to_freq(f_hot_count)
+            logging.info("beacon: loaded fmin_hot=%.2f from nvm",
+                self.nvm['fmin_hot'])
+            temp_adc = float(adc_hot_count) / beacon.temp_smooth_count * \
+                beacon.inv_adc_max
+            self.nvm['fmin_hot_temp'] = \
+                beacon.thermistor.calc_temp(temp_adc)
+            logging.info("beacon: loaded fmin_hot_temp=%.2f from nvm",
+                self.nvm['fmin_hot_temp'])
         if f_count < 0xFFFFFFFF and adc_count < 0xFFFF:
-            if self.parameters['fmin'] is None:
-                self.parameters['fmin'] = beacon.count_to_freq(f_count)
-                logging.info("beacon: loaded fmin=%.2f from nvm",
-                    self.parameters['fmin'])
-            if self.parameters['fmin_temp'] is None:
-                temp_adc = float(adc_count) / beacon.temp_smooth_count * \
-                    beacon.inv_adc_max
-                self.parameters['fmin_temp'] = \
-                    beacon.thermistor.calc_temp(temp_adc)
-                logging.info("beacon: loaded fmin_temp=%.2f from nvm",
-                    self.parameters['fmin_temp'])
+            self.nvm['fmin'] = beacon.count_to_freq(f_count)
+            logging.info("beacon: loaded fmin=%.2f from nvm",
+                self.nvm['fmin'])
+            temp_adc = float(adc_count) / beacon.temp_smooth_count * \
+                beacon.inv_adc_max
+            self.nvm['fmin_temp'] = \
+                beacon.thermistor.calc_temp(temp_adc)
+            logging.info("beacon: loaded fmin_temp=%.2f from nvm",
+                self.nvm['fmin_temp'])
         else:
             logging.info("beacon: fmin parameters not found in nvm")
-        return self.build()
+        if self.nvm['fmin_hot'] is not None:
+            dt = self.nvm['fmin_hot_temp'] - self.nvm['fmin_temp']
+            ppm = (self.nvm['fmin_hot'] - self.nvm['fmin']) / self.nvm['fmin']
+            ppmc = ppm / dt
+            amfg = ppmc / self.parameters['tcc']
+            self.nvm['amfg'] = amfg
+            logging.info("beacon: oven calibration ppmc=%.9f amfg=%.4f in nvm",
+                ppmc, amfg)
 
 class BeaconTempModel:
     def __init__(self, amfg, tcc, tcfl, tctl, fmin, fmin_temp):
@@ -927,6 +970,8 @@ class ModelManager:
         if model is None:
             raise gcmd.error("Unknown model '%s'" % (name,))
         self.beacon.model = model
+        self.beacon.model_temp = self.beacon.model_temp_builder.build(
+            model.oven_calibration)
         gcmd.respond_info("Selected Beacon model '%s'" % (name,))
 
     cmd_BEACON_MODEL_SAVE_help = "Save current beacon model"
