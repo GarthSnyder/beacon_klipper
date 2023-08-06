@@ -344,10 +344,11 @@ class BeaconProbe:
         inv_freq = [1/f for f in freq]
         poly = Polynomial.fit(inv_freq, z_offset, 9)
         temp_median = median(temp)
+        oven_calibration = self.model_temp_builder.nvm['amfg'] is not None
         self.model = BeaconModel("default",
                                  self, poly, temp_median,
                                  min(z_offset), max(z_offset),
-                                 oven_calibration = True)
+                                 oven_calibration = oven_calibration)
         self.models[self.model.name] = self.model
         self.model.save(self)
         self.model_temp = self.model_temp_builder.build(
